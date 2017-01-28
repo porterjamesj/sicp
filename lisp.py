@@ -525,6 +525,7 @@ def extend_environment(vars, values, env):
         vars = cdr(vars)
         values = cdr(values)
     if values:
+        # TODO would be nice to have function name here
         raise EvalError("Too few arguments supplied")
     if vars:
         raise EvalError("Too many arguments supplied")
@@ -547,7 +548,23 @@ def define_variable(var, value, env):
 
 # running the evaluator as a program
 
+def user_print(obj):
+    if obj is None:
+        print("null")
+    elif isinstance(obj, bool):
+        print("true" if obj else "false")
+    elif is_compound_procedure(obj):
+        print(Pair.from_list([
+            Symbol("compound-procedure"),
+            procedure_parameters(obj),
+            procedure_body(obj),
+            Symbol("<procedure-env>")
+        ]))
+    else:
+        print(obj)
 
+
+# TODO many of these, arithmetic in particular, leak Python errors into lisp-land
 PRIMITIVE_PROCEDURES = {
     Symbol("car"): car,
     Symbol("cdr"): cdr,
@@ -558,6 +575,8 @@ PRIMITIVE_PROCEDURES = {
     Symbol("*"): lambda x, y: x * y,
     Symbol("/"): lambda x, y: x / y,
     Symbol("="): lambda x, y: x == y,
+    Symbol("print"): user_print,
+    Symbol("list"): lambda *xs: Pair.from_list(xs)
 }
 
 
@@ -598,22 +617,6 @@ def driver_loop(global_env):
             user_print(output)
         except (ParseError, EvalError) as e:
             print(e)
-
-
-def user_print(obj):
-    if obj is None:
-        print("null")
-    elif isinstance(obj, bool):
-        print("true" if obj else "false")
-    elif is_compound_procedure(obj):
-        print(Pair.from_list([
-            Symbol("compound-procedure"),
-            procedure_parameters(obj),
-            procedure_body(obj),
-            Symbol("<procedure-env>")
-        ]))
-    else:
-        print(obj)
 
 
 def main():
