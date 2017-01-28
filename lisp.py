@@ -19,6 +19,7 @@ class EvalError(Exception):
 LispData = Optional[Union['Symbol', 'Pair', str, int, float, bool]]
 
 
+# TODO symbols are not interned yet
 class Symbol(object):
     def __init__(self, data: str) -> None:
         self.data = data
@@ -196,40 +197,79 @@ def eval(exp: LispData, env: dict) -> LispData:
     elif is_cond(exp):
         return eval(cond_to_if(exp), env)
     elif is_application(exp):
-        return apply(eval(operator(exp), env), list_of_values(operands(exp), env))
+        return apply(actual_value(operator(exp), env), operands(exp), env)
     else:
         raise EvalError("unknown expression type -- EVAL", exp)
 
 
-def apply(procedure: LispData, arguments: LispList) -> LispData:
+def apply(procedure: LispData, arguments: LispList, env: dict) -> LispData:
     if is_primitive_procedure(procedure):
-        return apply_primitive_procedure(procedure, arguments)
+        return apply_primitive_procedure(
+            procedure,
+            list_of_arg_values(arguments, env)
+        )
     elif is_compound_procedure(procedure):
         return eval_sequence(
             procedure_body(procedure),
             extend_environment(procedure_parameters(procedure),
-                               arguments, procedure_environment(procedure))
+                               list_of_delayed_args(arguments, env),
+                               procedure_environment(procedure))
         )
     else:
         raise EvalError("Unknown procedure type -- APPLY", procedure)
 
 
+# stuff for laziness
+
+def actual_value(exp, env):
+    return force_it(eval(exp, env))
+
+
+def force_it(obj):
+    if is_thunk(obj):
+        return actual_value(thunk_exp(obj), thunk_env(obj))
+    else:
+        return obj
+
+
+def delay_it(exp, env):
+    return Pair.from_list([Symbol("thunk"), exp, env])
+
+
+def is_thunk(obj):
+    return tagged_list(obj, Symbol("thunk"))
+
+
+def thunk_exp(thunk):
+    return cadr(thunk)
+
+
+def thunk_env(thunk):
+    return caddr(thunk)
+
+
 # representing expressions
 
-# TODO this code evaluates operands from left to right. Exercise 4.1
-# is to write a version that evaluates from right to left
-#
-# it would pretty much be the same but recurse from the right
-def list_of_values(exps: LispList, env: dict) -> LispList:
+
+def list_of_arg_values(exps: LispList, env: dict) -> LispList:
     if no_operands(exps):
         return None
     else:
-        return cons(eval(first_operand(exps), env), list_of_values(rest_operands(exps), env))
+        return cons(actual_value(first_operand(exps), env),
+                    list_of_arg_values(rest_operands(exps), env))
+
+
+def list_of_delayed_args(exps: LispList, env: dict) -> LispList:
+    if no_operands(exps):
+        return None
+    else:
+        return cons(delay_it(first_operand(exps), env),
+                    list_of_delayed_args(rest_operands(exps), env))
 
 
 def eval_if(exp: LispData, env: dict):
     # test for equality with the true value in the implemented language
-    if eval(if_predicate(exp), env) is True:
+    if actual_value(if_predicate(exp), env) is True:
         return eval(if_consequent(exp), env)
     else:
         return eval(if_alternative(exp), env)
@@ -601,8 +641,8 @@ def apply_primitive_procedure(proc, args):
 
 # driver loop
 
-INPUT_PROMPT = ";;; M-Eval input: "
-OUTPUT_PROMPT = ";;; M-Eval value: "
+INPUT_PROMPT = ";;; L-Eval input: "
+OUTPUT_PROMPT = ";;; L-Eval value: "
 
 
 def driver_loop(global_env):
@@ -612,7 +652,7 @@ def driver_loop(global_env):
         # we have to parse, whereas lisp doesn't because of `read`
         user_input = '\n'.join(iter(input, ''))
         try:
-            output = eval(parse(user_input), global_env)
+            output = actual_value(parse(user_input), global_env)
             print(OUTPUT_PROMPT)
             user_print(output)
         except (ParseError, EvalError) as e:
