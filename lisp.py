@@ -30,7 +30,7 @@ class Symbol(object):
         return self.data.__hash__()
 
     def __eq__(self, other):
-        return self.data == other.data
+        return isinstance(other, Symbol) and self.data == other.data
 
 
 class Pair(Generic[T]):
