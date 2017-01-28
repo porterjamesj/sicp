@@ -1,5 +1,5 @@
-from typing import List as L
-from typing import TypeVar, Generic
+from typing import List
+from typing import TypeVar, Generic, Union, Optional
 
 T = TypeVar('T')
 
@@ -13,60 +13,55 @@ class EvalError(Exception):
         self.msg = msg
         self.data = data
 
-
 # Lisp datatypes
 
-class LispData(object):
-    pass
+
+LispData = Optional[Union['Symbol', 'Pair', str, int, float, bool]]
 
 
-class Symbol(str, LispData):
+class Symbol(object):
+    def __init__(self, data: str) -> None:
+        self.data = data
+
     def __repr__(self):
-        return self
+        return self.data
+
+    def __hash__(self):
+        return self.data.__hash__()
+
+    def __eq__(self, other):
+        return self.data == other.data
 
 
-class String(str, LispData):
+class Pair(Generic[T]):
+    def __init__(self, car: T, cdr: T=None) -> None:
+        self.car = car
+        self.cdr = cdr
+
+    @classmethod
+    def from_list(cls, xs):
+        if not xs:
+            return None
+        return Pair(xs[0], Pair.from_list(xs[1:]))
+
+    def __iter__(self):
+        curr = self
+        while curr:
+            yield curr.car
+            curr = curr.cdr
+
     def __repr__(self):
-        return super().__repr__()
-
-
-class Bool(int, LispData):  # cant inherit from bool
-    def __repr__(self):
-        return "true" if self else "false"
-
-
-LispTrue = Bool(1)
-LispFalse = Bool(0)
-
-
-class List(list, LispData, Generic[T]):
-    def __repr__(self):
-        # TODO handle quotes nicely
+        # TODO handle quoteing nicely
         contents = " ".join([c.__repr__() for c in self])
         return "({})".format(contents)
 
-    def __getitem__(self, item):
-        # make slicing closed
-        ret = list.__getitem__(self, item)
-        if isinstance(item, slice):
-            return List(ret)
-        else:
-            return ret
 
-
-# TODO make these closed under math
-
-class Int(int, LispData):
-    pass
-
-
-class Float(float, LispData):
-    pass
-
+LispList = Pair[LispData]
 
 # parser
 
-def tokenize(chars: str) -> L[str]:
+
+def tokenize(chars: str) -> List[str]:
     "Convert a string of characters into a list of tokens."
     return chars.replace('(', ' ( ').replace(')', ' ) ').split()
 
@@ -80,19 +75,19 @@ def parse(program):
     return parsed
 
 
-def read_from_tokens(tokens: L[str]) -> LispData:
+def read_from_tokens(tokens: List[str]) -> LispData:
     "Read an expression from a sequence of tokens."
     if not tokens:
         raise ParseError('unexpected EOF while reading')
     token = tokens.pop(0)
     if '(' == token:
-        acc: List[LispData] = List()
+        acc: List = []
         while tokens and tokens[0] != ')':
             acc.append(read_from_tokens(tokens))
         if not tokens:
             raise ParseError("unexpected EOF while reading")
         tokens.pop(0)  # pop off ')'
-        return acc
+        return Pair.from_list(acc)
     elif ')' == token:
         raise ParseError('unexpected )')
     else:
@@ -101,41 +96,47 @@ def read_from_tokens(tokens: L[str]) -> LispData:
 
 def atom(token: str) -> LispData:
     try:
-        return Int(int(token))
+        return int(token)
     except ValueError:
         try:
-            return Float(float(token))
+            return float(token)
         except ValueError:
             # TODO: chars?
             if token == "true":
-                return Bool(True)
+                return True
             elif token == "false":
-                return Bool(False)
+                return False
             elif token.startswith('"'):
                 if not token.endswith('"'):
                     raise ParseError("unclosed string: {}".format(token))
                 s = token[1:-1]
                 if '"' in s:
                     raise ParseError("invalid string: {}".format(token))
-                return String(s)
+                return s
             else:
                 return Symbol(token)
 
 
 # cars and cdrs, cons
 
-def cons(x: LispData, xs: List[LispData]):
-    return List([x] + xs)
+def cons(x: LispData, xs: LispData):
+    return Pair(x, xs)
 
 
-def car(xs: List[LispData]) -> LispData:
-    return xs[0]
+def car(xs: LispList) -> LispData:
+    if isinstance(xs, Pair):
+        return xs.car
+    else:
+        raise EvalError("can't car {}".format(type(xs)))
 
 
-def cdr(xs: List[LispData]) -> List[LispData]:
-    return xs[1:]
+def cdr(xs: LispList) -> LispData:
+    if isinstance(xs, Pair):
+        return xs.cdr
+    else:
+        raise EvalError("can't cdr {}".format(type(xs)))
 
-# TODO make more efficient?
+
 def caar(x): return car(car(x))
 def cadr(x): return car(cdr(x))
 def cdar(x): return cdr(car(x))
@@ -200,7 +201,7 @@ def eval(exp: LispData, env: dict) -> LispData:
         raise EvalError("unknown expression type -- EVAL", exp)
 
 
-def apply(procedure: LispData, arguments: List[LispData]) -> LispData:
+def apply(procedure: LispData, arguments: LispList) -> LispData:
     if is_primitive_procedure(procedure):
         return apply_primitive_procedure(procedure, arguments)
     elif is_compound_procedure(procedure):
@@ -219,16 +220,16 @@ def apply(procedure: LispData, arguments: List[LispData]) -> LispData:
 # is to write a version that evaluates from right to left
 #
 # it would pretty much be the same but recurse from the right
-def list_of_values(exps: List[LispData], env: dict) -> List[LispData]:
+def list_of_values(exps: LispList, env: dict) -> LispList:
     if no_operands(exps):
-        return List([])
+        return None
     else:
-        return List([eval(first_operand(exps), env)]) + list_of_values(rest_operands(exps), env)  # type: ignore
+        return cons(eval(first_operand(exps), env), list_of_values(rest_operands(exps), env))
 
 
 def eval_if(exp: LispData, env: dict):
     # test for equality with the true value in the implemented language
-    if eval(if_predicate(exp), env) == LispTrue:
+    if eval(if_predicate(exp), env) is True:
         return eval(if_consequent(exp), env)
     else:
         return eval(if_alternative(exp), env)
@@ -264,8 +265,8 @@ def eval_definition(exp, env):
 def is_self_evaluating(exp):
     # NOTE our lisp has bools and apparently the one in the book
     # doesn't? this is probably ok
-    return (isinstance(exp, Float) or isinstance(exp, Int)
-            or isinstance(exp, String) or isinstance(exp, Bool))
+    return (isinstance(exp, float) or isinstance(exp, int)
+            or isinstance(exp, str) or isinstance(exp, bool))
 
 
 def is_variable(exp):
@@ -277,14 +278,11 @@ def is_quoted(exp):
 
 
 def text_of_quotation(exp):
-    n = len(exp)
-    if n != 2:
-        raise EvalError("quote -- wrong number of arguments {}".format(n))
     return cadr(exp)
 
 
 def tagged_list(exp, tag):
-    return isinstance(exp, List) and car(exp) == tag
+    return isinstance(exp, Pair) and car(exp) == tag
 
 
 def is_assignment(exp):
@@ -355,11 +353,11 @@ def if_alternative(exp):
     if cdddr(exp):
         return cadddr(exp)
     else:
-        return LispFalse
+        return False
 
 
 def make_if(predicate, consequent, alternative):
-    List([Symbol("if"), predicate, consequent, alternative])
+    Pair.from_list([Symbol("if"), predicate, consequent, alternative])
 
 
 def is_begin(exp):
@@ -396,9 +394,7 @@ def make_begin(seq):
 
 
 def is_application(seq):
-    # TODO in the book this is `pair?`, so this is a bit bogus becuase
-    # I don't have pairs but i think it will fine?
-    return isinstance(seq, List)
+    return isinstance(seq, Pair)
 
 
 def operator(exp):
@@ -473,7 +469,7 @@ def expand_clauses(clauses):
 
 
 def make_procedure(parameters, body, env):
-    return List([Symbol("procedure"), parameters, body, env])
+    return Pair.from_list([Symbol("procedure"), parameters, body, env])
 
 
 def is_compound_procedure(exp):
@@ -496,6 +492,10 @@ def procedure_environment(p):
 
 # NOTE I represent enviornments differently than the book does (using
 # dictionaries, so a bit more natural in Python)
+#
+# according to george king, doing it this way results in a memory leak
+# due to the way closures work, and that apparently using linked lists
+# avoids it. i will have to think about this more.
 
 def is_empty(env):
     return not bool(env)
@@ -519,12 +519,15 @@ def lookup_variable_value(var, env):
 
 
 def extend_environment(vars, values, env):
-    if len(vars) != len(values):
-        if len(vars) > len(values):
-            raise EvalError("Too few arguments supplied")
-        else:
-            raise EvalError("Too many arguments supplied")
-    ret = dict(zip(vars, values))
+    ret = {}
+    while vars and values:
+        ret[car(vars)] = car(values)
+        vars = cdr(vars)
+        values = cdr(values)
+    if values:
+        raise EvalError("Too few arguments supplied")
+    if vars:
+        raise EvalError("Too many arguments supplied")
     ret[ENCLOSING] = env
     return ret
 
@@ -549,7 +552,7 @@ PRIMITIVE_PROCEDURES = {
     Symbol("car"): car,
     Symbol("cdr"): cdr,
     Symbol("cons"): cons,
-    Symbol("null?"): lambda x: Bool(not bool(x)),
+    Symbol("null?"): lambda x: not bool(x),
     Symbol("+"): lambda x, y: x + y,
     Symbol("-"): lambda x, y: x - y,
     Symbol("*"): lambda x, y: x * y,
@@ -559,7 +562,7 @@ PRIMITIVE_PROCEDURES = {
 
 
 def setup_environment():
-    initial_environment = {k: List([Symbol("primitive"), v])
+    initial_environment = {k: Pair.from_list([Symbol("primitive"), v])
                            for k, v in PRIMITIVE_PROCEDURES.items()}
     initial_environment[ENCLOSING] = {}
     return initial_environment
@@ -598,16 +601,23 @@ def driver_loop(global_env):
 
 
 def user_print(obj):
-    if is_compound_procedure(obj):
-        print(List([Symbol("compound-procedure"),
-                    procedure_parameters(obj), procedure_body(obj), Symbol("<procedure-env>")]))
+    if obj is None:
+        print("null")
+    elif isinstance(obj, bool):
+        print("true" if obj else "false")
+    elif is_compound_procedure(obj):
+        print(Pair.from_list([
+            Symbol("compound-procedure"),
+            procedure_parameters(obj),
+            procedure_body(obj),
+            Symbol("<procedure-env>")
+        ]))
     else:
         print(obj)
 
 
 def main():
     driver_loop(setup_environment())
-
 
 
 if __name__ == "__main__":
